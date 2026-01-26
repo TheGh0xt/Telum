@@ -5,6 +5,7 @@ pub enum ParseError {
     InvalidLength { expected: usize, found: usize }, // More descriptive!
     UnknownMessageType,
     TruncatedBuffer,
+    InvalidPayloadLength,
 }
 
 impl Display for ParseError {
@@ -19,6 +20,7 @@ impl Display for ParseError {
             }
             Self::UnknownMessageType => write!(f, "Unknown message type encountered"),
             Self::TruncatedBuffer => write!(f, "Buffer ended prematurely (truncated)"),
+            Self::InvalidPayloadLength => write!(f, "Invalid payload length (must be >= 1)"),
         }
     }
 }

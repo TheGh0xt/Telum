@@ -5,6 +5,7 @@ pub struct Header {
     pub length: u16,
 }
 
+#[derive(Debug)]
 pub enum Message<'a> {
     Handshake { client_id: u32 },
     Ping { timestamp: u64 },
