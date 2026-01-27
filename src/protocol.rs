@@ -11,3 +11,8 @@ pub enum Message<'a> {
     Ping { timestamp: u64 },
     RawData(&'a [u8]),
 }
+
+#[derive(Debug)]
+pub struct Payload<'a> {
+    pub bytes: &'a [u8],
+}

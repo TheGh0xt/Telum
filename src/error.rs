@@ -17,6 +17,8 @@ pub enum FrameError {
     TruncatedHeader,
     #[error("invalid payload (truncated): expected {expected}, found: {found}")]
     TruncatedPayload { expected: usize, found: usize },
+    #[error("zero body data parsed")]
+    ZeroBodyParsed,
 }
 
 #[derive(Error, Debug)]
@@ -27,8 +29,6 @@ pub enum MessageError {
     InvalidBodyLength { expected: usize, found: usize },
     #[error("invalid buffer length: expected: {expected}, found: {found}")]
     InvalidBufferLength { expected: usize, found: usize },
-    #[error("zero body data parsed")]
-    ZeroBodyParsed,
     #[error("payload is empty: expected: {expected}, found: {found}")]
     PayloadEmpty { expected: usize, found: usize },
 }

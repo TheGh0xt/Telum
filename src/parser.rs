@@ -1,6 +1,6 @@
 use crate::{
     error::{FrameError, MessageError},
-    protocol::{Header, Message},
+    protocol::{Header, Message, Payload},
 };
 
 /// | version: u8 -> 2 bytes == 0x01..n| flags: u8 -> 2 bytes == 0x01..n| length: u16 -> 4 bytes == big endian [0x01..n, 0x01..n]|
@@ -23,35 +23,30 @@ pub fn parse_header(input: &[u8]) -> Result<(Header, &[u8]), FrameError> {
     ))
 }
 
-pub fn parse_message<'a>(
+pub fn parse_payload<'a>(
     input: &'a [u8],
     header: &Header,
-) -> Result<(Message<'a>, &'a [u8]), MessageError> {
+) -> Result<(Payload<'a>, &'a [u8]), FrameError> {
     let payload_len = header.length as usize;
 
-    if payload_len <= 1 {
-        return Err(MessageError::ZeroBodyParsed);
-    }
-
     if input.len() < payload_len {
-        return Err(MessageError::InvalidBufferLength {
+        return Err(FrameError::TruncatedPayload {
             expected: payload_len,
             found: input.len(),
         });
-    }
+    };
 
-    let payload = &input[..payload_len];
-    let remaining = &input[payload_len..];
+    Ok((
+        Payload {
+            bytes: &input[..payload_len],
+        },
+        &input[payload_len..],
+    ))
+}
 
-    if payload.is_empty() {
-        return Err(MessageError::PayloadEmpty {
-            expected: payload_len,
-            found: 0,
-        });
-    }
-
-    let msg_type = payload[0];
-    let body = &payload[1..];
+pub fn parse_message<'a>(payload: Payload<'a>) -> Result<Message<'a>, MessageError> {
+    let msg_type = payload.bytes[0];
+    let body = &payload.bytes[1..];
 
     let msg = match msg_type {
         0x01 => {
@@ -61,7 +56,7 @@ pub fn parse_message<'a>(
                     found: body.len(),
                 });
             };
-            let client_id = u32::from_be_bytes([body[0], body[1], body[2], body[3]]);
+            let client_id = u32::from_be_bytes(body.try_into().unwrap());
             Message::Handshake { client_id }
         }
         0x02 => {
@@ -72,24 +67,22 @@ pub fn parse_message<'a>(
                 });
             };
 
-            let timestamp = u64::from_be_bytes([
-                body[0], body[1], body[2], body[3], body[4], body[5], body[6], body[7],
-            ]);
+            let timestamp = u64::from_be_bytes(body.try_into().unwrap());
 
             Message::Ping { timestamp }
         }
         0x03 => Message::RawData(body),
-        _ => return Err(MessageError::UnknownMessageType(msg_type)),
+        other => return Err(MessageError::UnknownMessageType(other)),
     };
 
-    Ok((msg, remaining))
+    Ok(msg)
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{
         error::{FrameError, MessageError},
-        parser::{parse_header, parse_message},
+        parser::{parse_header, parse_message, parse_payload},
         protocol::Message,
     };
 
@@ -115,17 +108,6 @@ mod tests {
     }
 
     #[test]
-    fn zero_body_parsed_as_message() {
-        let input = [0x01, 0x02, 0x00, 0x01];
-
-        let (header, input) = parse_header(&input).unwrap();
-
-        let err = parse_message(input, &header).unwrap_err();
-
-        matches!(err, MessageError::ZeroBodyParsed);
-    }
-
-    #[test]
     fn invalid_message_length() {
         let input = [0x01, 0x02, 0x00, 0x05];
 
@@ -133,11 +115,11 @@ mod tests {
 
         // dbg!(&header, &input.len());
 
-        let err = parse_message(input, &header).unwrap_err();
+        let err = parse_payload(input, &header).unwrap_err();
 
         matches!(
             err,
-            MessageError::InvalidBufferLength {
+            FrameError::TruncatedPayload {
                 expected: 5,
                 found: 0,
             }
@@ -152,16 +134,32 @@ mod tests {
             0x00, 0x00, 0x00, 0x2A, // client_id = 42
         ];
 
-        let (header, remaining) = parse_header(&input).unwrap();
+        let (header, input) = parse_header(&input).unwrap();
 
-        let (msg, remaining) = parse_message(remaining, &header).unwrap();
+        let (payload, _) = parse_payload(input, &header).unwrap();
 
-        assert!(remaining.is_empty(), "remaining is not empty");
+        let msg = parse_message(payload).unwrap();
 
         match msg {
             Message::Handshake { client_id } => assert_eq!(client_id, 42),
             _ => println!("only handshake needs to be returned"),
         }
+    }
+
+    #[test]
+    fn ensure_overflow_after_parsing_payload() {
+        let input = [
+            0x01, 0x00, 0x00, 0x05, // header: length = 5
+            0x01, // msg_type = Handshake
+            0x00, 0x00, 0x00, 0x2A, // client_id = 42
+            0xFF, 0xFF, // overflow
+        ];
+
+        let (header, input) = parse_header(&input).unwrap();
+
+        let (_, remaining) = parse_payload(input, &header).unwrap();
+
+        assert!(!remaining.is_empty(), "remaining should not be empty")
     }
 
     #[test]
@@ -172,9 +170,11 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, 0x69, 0x61, 0x1A, 0x80,
         ];
 
-        let (header, remaining) = parse_header(&input).unwrap();
+        let (header, input) = parse_header(&input).unwrap();
 
-        let (msg, remaining) = parse_message(remaining, &header).unwrap();
+        let (payload, remaining) = parse_payload(input, &header).unwrap();
+
+        let msg = parse_message(payload).unwrap();
 
         assert!(
             remaining.is_empty(),
@@ -190,23 +190,13 @@ mod tests {
 
     #[test]
     fn unknown_parsed_message_type() {
-        let input = [0x01, 0x02, 0x00, 0x01, 0x04];
-
+        let input = [0x01, 0x02, 0x00, 0x02, 0x04, 0x05];
         let (header, input) = parse_header(&input).unwrap();
 
-        // dbg!(&header, &input.len());
+        let (payload, _) = parse_payload(input, &header).unwrap();
 
-        let err = parse_message(input, &header).unwrap_err();
+        let err = parse_message(payload).unwrap_err();
 
         matches!(err, MessageError::UnknownMessageType(0x04));
-    }
-
-    #[test]
-    fn zero_header_length() {
-        let input = [0x01, 0x02, 0x00];
-
-        let err = parse_header(&input).unwrap_err();
-
-        matches!(err, FrameError::TruncatedHeader);
     }
 }
