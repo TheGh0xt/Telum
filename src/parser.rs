@@ -1,18 +1,17 @@
 use crate::{
-    error::ParseError,
+    error::{FrameError, MessageError},
     protocol::{Header, Message},
 };
 
-/// | version: u8 | flags: u8 | length: u16 |
-pub fn parse_header(input: &[u8]) -> Result<(Header, &[u8]), ParseError> {
+/// | version: u8 -> 2 bytes == 0x01..n| flags: u8 -> 2 bytes == 0x01..n| length: u16 -> 4 bytes == big endian [0x01..n, 0x01..n]|
+pub fn parse_header(input: &[u8]) -> Result<(Header, &[u8]), FrameError> {
     if input.len() < 4 {
-        return Err(ParseError::TruncatedBuffer);
+        return Err(FrameError::TruncatedHeader);
     };
 
     let version = input[0];
     let flags = input[1];
     let length = u16::from_be_bytes([input[2], input[3]]);
-    let remaining = &input[4..];
 
     Ok((
         Header {
@@ -20,22 +19,22 @@ pub fn parse_header(input: &[u8]) -> Result<(Header, &[u8]), ParseError> {
             flags,
             length,
         },
-        remaining,
+        &input[4..],
     ))
 }
 
 pub fn parse_message<'a>(
     input: &'a [u8],
     header: &Header,
-) -> Result<(Message<'a>, &'a [u8]), ParseError> {
+) -> Result<(Message<'a>, &'a [u8]), MessageError> {
     let payload_len = header.length as usize;
 
-    if payload_len >= 1 {
-        return Err(ParseError::InvalidPayloadLength);
+    if payload_len <= 1 {
+        return Err(MessageError::ZeroBodyParsed);
     }
 
     if input.len() < payload_len {
-        return Err(ParseError::InvalidLength {
+        return Err(MessageError::InvalidBufferLength {
             expected: payload_len,
             found: input.len(),
         });
@@ -45,7 +44,7 @@ pub fn parse_message<'a>(
     let remaining = &input[payload_len..];
 
     if payload.is_empty() {
-        return Err(ParseError::InvalidLength {
+        return Err(MessageError::PayloadEmpty {
             expected: payload_len,
             found: 0,
         });
@@ -57,7 +56,7 @@ pub fn parse_message<'a>(
     let msg = match msg_type {
         0x01 => {
             if body.len() != 4 {
-                return Err(ParseError::InvalidLength {
+                return Err(MessageError::InvalidBodyLength {
                     expected: 4,
                     found: body.len(),
                 });
@@ -67,7 +66,7 @@ pub fn parse_message<'a>(
         }
         0x02 => {
             if body.len() != 8 {
-                return Err(ParseError::InvalidLength {
+                return Err(MessageError::InvalidBodyLength {
                     expected: 8,
                     found: body.len(),
                 });
@@ -80,7 +79,7 @@ pub fn parse_message<'a>(
             Message::Ping { timestamp }
         }
         0x03 => Message::RawData(body),
-        _ => return Err(ParseError::UnknownMessageType),
+        _ => return Err(MessageError::UnknownMessageType(msg_type)),
     };
 
     Ok((msg, remaining))
@@ -89,7 +88,7 @@ pub fn parse_message<'a>(
 #[cfg(test)]
 mod tests {
     use crate::{
-        error::ParseError,
+        error::{FrameError, MessageError},
         parser::{parse_header, parse_message},
         protocol::Message,
     };
@@ -112,7 +111,18 @@ mod tests {
 
         let err = parse_header(&input).unwrap_err();
 
-        matches!(err, ParseError::TruncatedBuffer);
+        matches!(err, FrameError::TruncatedHeader);
+    }
+
+    #[test]
+    fn zero_body_parsed_as_message() {
+        let input = [0x01, 0x02, 0x00, 0x01];
+
+        let (header, input) = parse_header(&input).unwrap();
+
+        let err = parse_message(input, &header).unwrap_err();
+
+        matches!(err, MessageError::ZeroBodyParsed);
     }
 
     #[test]
@@ -121,13 +131,13 @@ mod tests {
 
         let (header, input) = parse_header(&input).unwrap();
 
-        dbg!(&header, &input.len());
+        // dbg!(&header, &input.len());
 
         let err = parse_message(input, &header).unwrap_err();
 
         matches!(
             err,
-            ParseError::InvalidLength {
+            MessageError::InvalidBufferLength {
                 expected: 5,
                 found: 0,
             }
@@ -184,19 +194,19 @@ mod tests {
 
         let (header, input) = parse_header(&input).unwrap();
 
-        dbg!(&header, &input.len());
+        // dbg!(&header, &input.len());
 
         let err = parse_message(input, &header).unwrap_err();
 
-        matches!(err, ParseError::UnknownMessageType);
+        matches!(err, MessageError::UnknownMessageType(0x04));
     }
 
     #[test]
     fn zero_header_length() {
-        let input = [0x01, 0x02, 0x00, 0x00];
+        let input = [0x01, 0x02, 0x00];
 
         let err = parse_header(&input).unwrap_err();
 
-        matches!(err, ParseError::TruncatedBuffer);
+        matches!(err, FrameError::TruncatedHeader);
     }
 }

@@ -1,28 +1,34 @@
-use std::{error::Error, fmt::Display};
+use thiserror::Error;
 
-#[derive(Debug)]
+// deprecated
+#[derive(Error, Debug)]
 pub enum ParseError {
-    InvalidLength { expected: usize, found: usize }, // More descriptive!
+    #[error("invalid protocol length: expected: {expected}, found: {found}")]
+    InvalidLength { expected: usize, found: usize },
+    #[error("unknown message type encountered")]
     UnknownMessageType,
+    #[error("Buffer ended prematurely (truncated)")]
     TruncatedBuffer,
-    InvalidPayloadLength,
 }
 
-impl Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidLength { expected, found } => {
-                write!(
-                    f,
-                    "Invalid protocol length: expected {}, found {}",
-                    expected, found
-                )
-            }
-            Self::UnknownMessageType => write!(f, "Unknown message type encountered"),
-            Self::TruncatedBuffer => write!(f, "Buffer ended prematurely (truncated)"),
-            Self::InvalidPayloadLength => write!(f, "Invalid payload length (must be >= 1)"),
-        }
-    }
+#[derive(Error, Debug)]
+pub enum FrameError {
+    #[error("invalid header (truncated)")]
+    TruncatedHeader,
+    #[error("invalid payload (truncated): expected {expected}, found: {found}")]
+    TruncatedPayload { expected: usize, found: usize },
 }
 
-impl Error for ParseError {}
+#[derive(Error, Debug)]
+pub enum MessageError {
+    #[error("unknown message type encountered")]
+    UnknownMessageType(u8),
+    #[error("invalid body length: expected: {expected}, found: {found}")]
+    InvalidBodyLength { expected: usize, found: usize },
+    #[error("invalid buffer length: expected: {expected}, found: {found}")]
+    InvalidBufferLength { expected: usize, found: usize },
+    #[error("zero body data parsed")]
+    ZeroBodyParsed,
+    #[error("payload is empty: expected: {expected}, found: {found}")]
+    PayloadEmpty { expected: usize, found: usize },
+}
