@@ -50,22 +50,12 @@ pub fn parse_message<'a>(payload: Payload<'a>) -> Result<Message<'a>, MessageErr
 
     let msg = match msg_type {
         0x01 => {
-            if body.len() != 4 {
-                return Err(MessageError::InvalidBodyLength {
-                    expected: 4,
-                    found: body.len(),
-                });
-            };
+            expect_len(body.len(), 4)?;
             let client_id = u32::from_be_bytes(body.try_into().unwrap());
             Message::Handshake { client_id }
         }
         0x02 => {
-            if body.len() != 8 {
-                return Err(MessageError::InvalidBodyLength {
-                    expected: 8,
-                    found: body.len(),
-                });
-            };
+            expect_len(body.len(), 8)?;
 
             let timestamp = u64::from_be_bytes(body.try_into().unwrap());
 
@@ -78,13 +68,39 @@ pub fn parse_message<'a>(payload: Payload<'a>) -> Result<Message<'a>, MessageErr
     Ok(msg)
 }
 
+fn expect_len(actual: usize, expected: usize) -> Result<(), MessageError> {
+    if actual != expected {
+        return Err(MessageError::InvalidBodyLength {
+            expected,
+            found: actual,
+        });
+    };
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
         error::{FrameError, MessageError},
         parser::{parse_header, parse_message, parse_payload},
-        protocol::Message,
+        protocol::{Message, Payload},
     };
+
+    #[test]
+    fn fuzz_payload_without_panic() {
+        for len in 0..32 {
+            let mut buf = vec![0u8, len];
+
+            buf.iter_mut().enumerate().for_each(|(i, b)| *b = i as u8);
+
+            dbg!(&buf);
+
+            let payload = Payload { bytes: &buf };
+
+            let _ = parse_message(payload);
+        }
+    }
 
     #[test]
     fn valid_parsed_header() {
