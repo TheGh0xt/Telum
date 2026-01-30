@@ -1,7 +1,50 @@
 use crate::{
     error::{FrameError, MessageError},
-    protocol::{Header, Message, Payload},
+    protocol::{Header, Message, ParserState, Payload, StreamParser},
 };
+
+impl StreamParser {
+    pub fn push(&mut self, data: &[u8]) -> Vec<Result<Message, MessageError>> {
+        self.buffer.extend_from_slice(data);
+
+        let mut messages = Vec::new();
+
+        loop {
+            match &self.state {
+                ParserState::ReadingHeader => {
+                    let (header, consumed) = {
+                        let Ok((header, remaining)) = parse_header(&self.buffer) else {
+                            break;
+                        };
+                        (header, self.buffer.len() - remaining.len())
+                    };
+
+                    self.buffer.drain(..consumed);
+                    self.state = ParserState::ReadPayload { header };
+                }
+
+                ParserState::ReadPayload { header } => {
+                    let (payload, consumed) = {
+                        let Ok((payload, remaining)) = parse_payload(&self.buffer, header) else {
+                            break;
+                        };
+                        (payload, self.buffer.len() - remaining.len())
+                    };
+
+                    self.buffer.drain(..consumed);
+
+                    match parse_message(payload) {
+                        Ok(msg) => messages.push(Ok(msg)),
+                        Err(e) => messages.push(Err(e)),
+                    }
+
+                    self.state = ParserState::ReadingHeader;
+                }
+            }
+        }
+        messages
+    }
+}
 
 /// | version: u8 -> 2 bytes == 0x01..n| flags: u8 -> 2 bytes == 0x01..n| length: u16 -> 4 bytes == big endian [0x01..n, 0x01..n]|
 pub fn parse_header(input: &[u8]) -> Result<(Header, &[u8]), FrameError> {
@@ -26,7 +69,7 @@ pub fn parse_header(input: &[u8]) -> Result<(Header, &[u8]), FrameError> {
 pub fn parse_payload<'a>(
     input: &'a [u8],
     header: &Header,
-) -> Result<(Payload<'a>, &'a [u8]), FrameError> {
+) -> Result<(Payload, &'a [u8]), FrameError> {
     let payload_len = header.length as usize;
 
     if input.len() < payload_len {
@@ -38,13 +81,13 @@ pub fn parse_payload<'a>(
 
     Ok((
         Payload {
-            bytes: &input[..payload_len],
+            bytes: input[..payload_len].to_vec(),
         },
         &input[payload_len..],
     ))
 }
 
-pub fn parse_message<'a>(payload: Payload<'a>) -> Result<Message<'a>, MessageError> {
+pub fn parse_message(payload: Payload) -> Result<Message, MessageError> {
     let msg_type = payload.bytes[0];
     let body = &payload.bytes[1..];
 
@@ -61,7 +104,7 @@ pub fn parse_message<'a>(payload: Payload<'a>) -> Result<Message<'a>, MessageErr
 
             Message::Ping { timestamp }
         }
-        0x03 => Message::RawData(body),
+        0x03 => Message::RawData(body.to_vec()),
         other => return Err(MessageError::UnknownMessageType(other)),
     };
 
@@ -96,7 +139,9 @@ mod tests {
 
             dbg!(&buf);
 
-            let payload = Payload { bytes: &buf };
+            let payload = Payload {
+                bytes: buf.to_vec(),
+            };
 
             let _ = parse_message(payload);
         }

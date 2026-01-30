@@ -1,3 +1,5 @@
+use std::vec;
+
 #[derive(Debug)]
 pub struct Header {
     pub version: u8,
@@ -5,14 +7,36 @@ pub struct Header {
     pub length: u16,
 }
 
-#[derive(Debug)]
-pub enum Message<'a> {
+// important: message values are independent of the parser buffer
+#[derive(Debug, PartialEq)]
+pub enum Message {
     Handshake { client_id: u32 },
     Ping { timestamp: u64 },
-    RawData(&'a [u8]),
+    RawData(Vec<u8>),
 }
 
 #[derive(Debug)]
-pub struct Payload<'a> {
-    pub bytes: &'a [u8],
+pub struct Payload {
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub enum ParserState {
+    ReadingHeader,
+    ReadPayload { header: Header },
+}
+
+#[derive(Debug)]
+pub struct StreamParser {
+    pub buffer: Vec<u8>,
+    pub state: ParserState,
+}
+
+impl StreamParser {
+    fn new() -> Self {
+        Self {
+            buffer: Vec::new(),
+            state: ParserState::ReadingHeader,
+        }
+    }
 }
