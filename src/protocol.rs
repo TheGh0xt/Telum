@@ -33,7 +33,7 @@ pub struct StreamParser {
 }
 
 impl StreamParser {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             buffer: Vec::new(),
             state: ParserState::ReadingHeader,

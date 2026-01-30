@@ -3,9 +3,19 @@ use crate::{
     protocol::{Header, Message, ParserState, Payload, StreamParser},
 };
 
+// 32kb for max frame size for test purposes
+const MAX_FRAME_SIZE: usize = 32 * 1024; // 32KB
+const MAX_BUFFER_SIZE: usize = MAX_FRAME_SIZE * 2;
+
 impl StreamParser {
     pub fn push(&mut self, data: &[u8]) -> Vec<Result<Message, MessageError>> {
         self.buffer.extend_from_slice(data);
+
+        if self.buffer.len() > MAX_BUFFER_SIZE {
+            self.buffer.clear(); // clear the buffer back to empty
+            self.state = ParserState::ReadingHeader;
+            return vec![Err(MessageError::FrameTooLarge(self.buffer.len()))];
+        }
 
         let mut messages = Vec::new();
 
@@ -16,6 +26,15 @@ impl StreamParser {
                         let Ok((header, remaining)) = parse_header(&self.buffer) else {
                             break;
                         };
+
+                        let payload_len = header.length as usize;
+
+                        if payload_len > MAX_FRAME_SIZE {
+                            self.buffer.clear();
+                            self.state = ParserState::ReadingHeader;
+                            return vec![Err(MessageError::FrameTooLarge(self.buffer.len()))];
+                        }
+
                         (header, self.buffer.len() - remaining.len())
                     };
 
@@ -126,8 +145,8 @@ fn expect_len(actual: usize, expected: usize) -> Result<(), MessageError> {
 mod tests {
     use crate::{
         error::{FrameError, MessageError},
-        parser::{parse_header, parse_message, parse_payload},
-        protocol::{Message, Payload},
+        parser::{MAX_BUFFER_SIZE, MAX_FRAME_SIZE, parse_header, parse_message, parse_payload},
+        protocol::{Message, Payload, StreamParser},
     };
 
     #[test]
@@ -259,5 +278,30 @@ mod tests {
         let err = parse_message(payload).unwrap_err();
 
         matches!(err, MessageError::UnknownMessageType(0x04));
+    }
+
+    #[test]
+    fn reject_an_overloaded_frame() {
+        let mut parser = StreamParser::new();
+
+        let mut input = vec![0x01, 0x00];
+
+        input.extend_from_slice(&(MAX_FRAME_SIZE as u16 + 1).to_be_bytes());
+
+        let msg = parser.push(&input);
+
+        assert!(matches!(msg[0], Err(MessageError::FrameTooLarge(_))))
+    }
+
+    #[test]
+    fn slowris_test() {
+        let mut parser = StreamParser::new();
+
+        for _ in 0..(MAX_BUFFER_SIZE + 1) {
+            let msg = parser.push(&[0x00]);
+            if !msg.is_empty() {
+                break;
+            }
+        }
     }
 }

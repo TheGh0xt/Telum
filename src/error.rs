@@ -27,6 +27,8 @@ pub enum MessageError {
     UnknownMessageType(u8),
     #[error("invalid body length: expected: {expected}, found: {found}")]
     InvalidBodyLength { expected: usize, found: usize },
+    #[error("frame is too large: {0} bytes")]
+    FrameTooLarge(usize),
     #[error("invalid buffer length: expected: {expected}, found: {found}")]
     InvalidBufferLength { expected: usize, found: usize },
     #[error("payload is empty: expected: {expected}, found: {found}")]
