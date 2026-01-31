@@ -1,6 +1,6 @@
 use crate::{
     error::{FrameError, MessageError},
-    protocol::{Header, Message, ParserState, Payload, StreamParser},
+    protocol::{Header, Message, ParseOutput, ParserState, Payload, StreamParser},
 };
 
 // 32kb for max frame size for test purposes
@@ -8,13 +8,15 @@ const MAX_FRAME_SIZE: usize = 32 * 1024; // 32KB
 const MAX_BUFFER_SIZE: usize = MAX_FRAME_SIZE * 2;
 
 impl StreamParser {
-    pub fn push(&mut self, data: &[u8]) -> Vec<Result<Message, MessageError>> {
+    pub fn advance(&mut self, data: &[u8]) -> Vec<ParseOutput> {
         self.buffer.extend_from_slice(data);
 
         if self.buffer.len() > MAX_BUFFER_SIZE {
             self.buffer.clear(); // clear the buffer back to empty
             self.state = ParserState::ReadingHeader;
-            return vec![Err(MessageError::FrameTooLarge(self.buffer.len()))];
+            return vec![ParseOutput::Error(MessageError::FrameTooLarge(
+                self.buffer.len(),
+            ))];
         }
 
         let mut messages = Vec::new();
@@ -32,7 +34,9 @@ impl StreamParser {
                         if payload_len > MAX_FRAME_SIZE {
                             self.buffer.clear();
                             self.state = ParserState::ReadingHeader;
-                            return vec![Err(MessageError::FrameTooLarge(self.buffer.len()))];
+                            return vec![ParseOutput::Error(MessageError::FrameTooLarge(
+                                payload_len,
+                            ))];
                         }
 
                         (header, self.buffer.len() - remaining.len())
@@ -53,14 +57,19 @@ impl StreamParser {
                     self.buffer.drain(..consumed);
 
                     match parse_message(payload) {
-                        Ok(msg) => messages.push(Ok(msg)),
-                        Err(e) => messages.push(Err(e)),
+                        Ok(msg) => messages.push(ParseOutput::Message(msg)),
+                        Err(e) => messages.push(ParseOutput::Error(e)),
                     }
 
                     self.state = ParserState::ReadingHeader;
                 }
             }
         }
+
+        if messages.is_empty() {
+            return vec![ParseOutput::NeedMoreData];
+        }
+
         messages
     }
 }
@@ -107,6 +116,13 @@ pub fn parse_payload<'a>(
 }
 
 pub fn parse_message(payload: Payload) -> Result<Message, MessageError> {
+    if payload.bytes.is_empty() {
+        return Err(MessageError::PayloadEmpty {
+            expected: 1,
+            found: 0,
+        });
+    }
+
     let msg_type = payload.bytes[0];
     let body = &payload.bytes[1..];
 
@@ -145,8 +161,10 @@ fn expect_len(actual: usize, expected: usize) -> Result<(), MessageError> {
 mod tests {
     use crate::{
         error::{FrameError, MessageError},
-        parser::{MAX_BUFFER_SIZE, MAX_FRAME_SIZE, parse_header, parse_message, parse_payload},
-        protocol::{Message, Payload, StreamParser},
+        parser::{
+            self, MAX_BUFFER_SIZE, MAX_FRAME_SIZE, parse_header, parse_message, parse_payload,
+        },
+        protocol::{Message, ParseOutput, Payload, StreamParser},
     };
 
     #[test]
@@ -288,9 +306,12 @@ mod tests {
 
         input.extend_from_slice(&(MAX_FRAME_SIZE as u16 + 1).to_be_bytes());
 
-        let msg = parser.push(&input);
+        let msg = parser.advance(&input);
 
-        assert!(matches!(msg[0], Err(MessageError::FrameTooLarge(_))))
+        assert!(matches!(
+            msg[0],
+            ParseOutput::Error(MessageError::FrameTooLarge(_))
+        ))
     }
 
     #[test]
@@ -298,10 +319,21 @@ mod tests {
         let mut parser = StreamParser::new();
 
         for _ in 0..(MAX_BUFFER_SIZE + 1) {
-            let msg = parser.push(&[0x00]);
+            let msg = parser.advance(&[0x00]);
             if !msg.is_empty() {
                 break;
             }
         }
+    }
+
+    #[test]
+    fn check_to_need_more_data() {
+        let mut parser = StreamParser::new();
+
+        let input = [0x01, 0x02, 0x00, 0x02, 0x02];
+
+        let output = parser.advance(&input);
+
+        assert!(matches!(output[0], ParseOutput::NeedMoreData))
     }
 }

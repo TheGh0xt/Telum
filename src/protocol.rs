@@ -1,5 +1,7 @@
 use std::vec;
 
+use crate::error::MessageError;
+
 #[derive(Debug)]
 pub struct Header {
     pub version: u8,
@@ -24,6 +26,12 @@ pub struct Payload {
 pub enum ParserState {
     ReadingHeader,
     ReadPayload { header: Header },
+}
+
+pub enum ParseOutput {
+    NeedMoreData,
+    Message(Message),
+    Error(MessageError),
 }
 
 #[derive(Debug)]
