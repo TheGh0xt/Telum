@@ -37,6 +37,7 @@ pub enum ParseOutput {
 #[derive(Debug)]
 pub struct StreamParser {
     pub buffer: Vec<u8>,
+    pub cursor: usize,
     pub state: ParserState,
 }
 
@@ -45,6 +46,7 @@ impl StreamParser {
         Self {
             buffer: Vec::new(),
             state: ParserState::ReadingHeader,
+            cursor: 0,
         }
     }
 }

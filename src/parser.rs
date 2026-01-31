@@ -19,13 +19,15 @@ impl StreamParser {
             ))];
         }
 
-        let mut messages = Vec::new();
+        let mut outputs = Vec::new();
 
         loop {
             match &self.state {
                 ParserState::ReadingHeader => {
+                    let available = &self.buffer[self.cursor..];
+
                     let (header, consumed) = {
-                        let Ok((header, remaining)) = parse_header(&self.buffer) else {
+                        let Ok((header, remaining)) = parse_header(available) else {
                             break;
                         };
 
@@ -33,32 +35,36 @@ impl StreamParser {
 
                         if payload_len > MAX_FRAME_SIZE {
                             self.buffer.clear();
+                            self.cursor = 0;
                             self.state = ParserState::ReadingHeader;
                             return vec![ParseOutput::Error(MessageError::FrameTooLarge(
                                 payload_len,
                             ))];
                         }
 
-                        (header, self.buffer.len() - remaining.len())
+                        (header, available.len() - remaining.len())
                     };
 
-                    self.buffer.drain(..consumed);
+                    self.cursor += consumed;
+
                     self.state = ParserState::ReadPayload { header };
                 }
 
                 ParserState::ReadPayload { header } => {
+                    let available = &self.buffer[self.cursor..];
+
                     let (payload, consumed) = {
-                        let Ok((payload, remaining)) = parse_payload(&self.buffer, header) else {
+                        let Ok((payload, remaining)) = parse_payload(available, header) else {
                             break;
                         };
-                        (payload, self.buffer.len() - remaining.len())
+                        (payload, available.len() - remaining.len())
                     };
 
-                    self.buffer.drain(..consumed);
+                    self.cursor += consumed;
 
                     match parse_message(payload) {
-                        Ok(msg) => messages.push(ParseOutput::Message(msg)),
-                        Err(e) => messages.push(ParseOutput::Error(e)),
+                        Ok(msg) => outputs.push(ParseOutput::Message(msg)),
+                        Err(e) => outputs.push(ParseOutput::Error(e)),
                     }
 
                     self.state = ParserState::ReadingHeader;
@@ -66,11 +72,16 @@ impl StreamParser {
             }
         }
 
-        if messages.is_empty() {
+        if self.cursor > MAX_FRAME_SIZE {
+            self.buffer.drain(..self.cursor);
+            self.cursor = 0;
+        }
+
+        if outputs.is_empty() {
             return vec![ParseOutput::NeedMoreData];
         }
 
-        messages
+        outputs
     }
 }
 
@@ -173,8 +184,6 @@ mod tests {
             let mut buf = vec![0u8, len];
 
             buf.iter_mut().enumerate().for_each(|(i, b)| *b = i as u8);
-
-            dbg!(&buf);
 
             let payload = Payload {
                 bytes: buf.to_vec(),
