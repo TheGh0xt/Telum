@@ -9,14 +9,17 @@ const MAX_BUFFER_SIZE: usize = MAX_FRAME_SIZE * 2;
 
 impl StreamParser {
     pub fn advance(&mut self, data: &[u8]) -> Vec<ParseOutput> {
+        let start_len = self.buffer.len();
+
         self.buffer.extend_from_slice(data);
 
         if self.buffer.len() > MAX_BUFFER_SIZE {
             self.buffer.clear(); // clear the buffer back to empty
             self.state = ParserState::ReadingHeader;
-            return vec![ParseOutput::Error(MessageError::FrameTooLarge(
-                self.buffer.len(),
-            ))];
+            return vec![ParseOutput::Error(MessageError::FrameTooLarge {
+                declared: self.buffer.len(),
+                max: MAX_BUFFER_SIZE,
+            })];
         }
 
         let mut outputs = Vec::new();
@@ -24,7 +27,7 @@ impl StreamParser {
         loop {
             match &self.state {
                 ParserState::ReadingHeader => {
-                    let available = &self.buffer[self.cursor..];
+                    let available = self.available();
 
                     let (header, consumed) = {
                         let Ok((header, remaining)) = parse_header(available) else {
@@ -37,9 +40,10 @@ impl StreamParser {
                             self.buffer.clear();
                             self.cursor = 0;
                             self.state = ParserState::ReadingHeader;
-                            return vec![ParseOutput::Error(MessageError::FrameTooLarge(
-                                payload_len,
-                            ))];
+                            return vec![ParseOutput::Error(MessageError::FrameTooLarge {
+                                declared: payload_len,
+                                max: MAX_FRAME_SIZE,
+                            })];
                         }
 
                         (header, available.len() - remaining.len())
@@ -51,7 +55,13 @@ impl StreamParser {
                 }
 
                 ParserState::ReadPayload { header } => {
-                    let available = &self.buffer[self.cursor..];
+                    if header.length as usize > MAX_FRAME_SIZE {
+                        return vec![ParseOutput::Error(MessageError::FrameTooLarge {
+                            declared: header.length as usize,
+                            max: MAX_FRAME_SIZE,
+                        })];
+                    }
+                    let available = self.available();
 
                     let (payload, consumed) = {
                         let Ok((payload, remaining)) = parse_payload(available, header) else {
@@ -81,7 +91,26 @@ impl StreamParser {
             return vec![ParseOutput::NeedMoreData];
         }
 
+        if !self.buffer.is_empty() && self.cursor == start_len {
+            return vec![ParseOutput::Error(MessageError::Staled)];
+        }
+
         outputs
+    }
+}
+
+// Invariant:
+// - cursor <= buffer.len() at all times
+// - cursor only moves forward
+// - buffer is only truncated when cursor == 0
+// Therefore buffer[cursor..] is always valid.
+impl StreamParser {
+    #[inline(always)]
+    // SAFETY:
+    // cursor is always <= buffer.len()
+    // and never decreases
+    fn available(&self) -> &[u8] {
+        unsafe { self.buffer.get_unchecked(self.cursor..) }
     }
 }
 
@@ -175,7 +204,7 @@ mod tests {
         parser::{
             self, MAX_BUFFER_SIZE, MAX_FRAME_SIZE, parse_header, parse_message, parse_payload,
         },
-        protocol::{Message, ParseOutput, Payload, StreamParser},
+        protocol::{Message, ParseOutput, ParserState, Payload, StreamParser},
     };
 
     #[test]
@@ -319,7 +348,10 @@ mod tests {
 
         assert!(matches!(
             msg[0],
-            ParseOutput::Error(MessageError::FrameTooLarge(_))
+            ParseOutput::Error(MessageError::FrameTooLarge {
+                declared: _,
+                max: _,
+            })
         ))
     }
 
@@ -344,5 +376,35 @@ mod tests {
         let output = parser.advance(&input);
 
         assert!(matches!(output[0], ParseOutput::NeedMoreData))
+    }
+
+    #[test]
+    fn streaming_byte_by_byte() {
+        let mut parser = StreamParser::new();
+        let input = [
+            [0x01, 0x00, 0x00, 0x01, 0xFF],
+            [0x01, 0x00, 0x00, 0x01, 0xEE],
+        ];
+
+        let mut msgs = Vec::new();
+
+        for chunk in input {
+            msgs.extend(parser.advance(&chunk));
+        }
+
+        assert_eq!(msgs.len(), 2);
+    }
+
+    #[test]
+    fn detect_stalled_parser() {
+        let mut parser = StreamParser::new();
+
+        let output = parser.advance(&[0x01]);
+
+        assert!(
+            output
+                .iter()
+                .any(|r| matches!(r, ParseOutput::Error(MessageError::Staled)))
+        );
     }
 }
