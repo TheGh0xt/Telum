@@ -1,0 +1,19 @@
+# Telum Roadmap
+
+## Core Architecture & Performance
+- [ ] Implement **Zero-Copy** parsing using `Bytes` crate to minimize allocations.
+- [ ] Migrate to `tokio_util::codec` for industry-standard framing logic.
+- [ ] Support **Graceful Shutdown** via `tokio::signal`.
+- [ ] Add structured logging with the `tracing` crate.
+
+## Protocol Features
+- [ ] **Stateful Handshake**: Add version negotiation and capability exchange.
+- [ ] **Liveness**: Implement Heartbeat/Ping-Pong with timeouts.
+- [ ] **Multiplexing**: Support multiple concurrent streams over a single TCP connection.
+- [ ] **Pub/Sub Engine**: Implement a thread-safe message broker for the `SUBSCRIBE` command.
+
+## Tooling & Observability
+- [ ] **Professional CLI**: Use `clap` for subcommands (`serve`, `send`, `subscribe`).
+- [ ] **bench**: Add `criterion` benchmarks for frame serialization/deserialization.
+- [ ] **Testing**: Implement property-based testing (via `proptest`) for the parser.
+- [ ] **Encryption**: Optional TLS support via `tokio-rustls`.
