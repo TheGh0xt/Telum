@@ -35,4 +35,6 @@ pub enum MessageError {
     InvalidBufferLength { expected: usize, found: usize },
     #[error("payload is empty: expected: {expected}, found: {found}")]
     PayloadEmpty { expected: usize, found: usize },
+    #[error("back pressure exceeded: expected: {declared}, found: {max}")]
+    BackPressureExceeded{ declared: usize, max: usize },
 }
